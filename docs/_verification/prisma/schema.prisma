@@ -1,0 +1,960 @@
+// packages/db/prisma/schema.prisma
+// Validated with Prisma 6.x. See docs/03-data-model.md for conventions and the raw-SQL migration.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DIRECT_DATABASE_URL")
+  extensions = [postgis, btree_gist]
+}
+
+// ───────────────────────── ENUMS ─────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DEACTIVATED
+}
+
+enum PlatformRole {
+  PLAYER
+  SUPPORT_AGENT
+  MODERATOR
+  ADMINISTRATOR
+}
+
+enum VenueRole {
+  OWNER
+  MANAGER
+  STAFF
+}
+
+enum SkillLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  COMPETITIVE
+}
+
+enum SportFormat {
+  SINGLES
+  DOUBLES
+  ANY
+}
+
+enum GameStatus {
+  DRAFT
+  OPEN
+  FULL
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+}
+
+enum GameVisibility {
+  PUBLIC
+  PRIVATE_INVITE
+  COMMUNITY_ONLY
+}
+
+enum JoinPolicy {
+  OPEN
+  APPROVAL
+}
+
+enum ParticipantStatus {
+  INVITED
+  REQUESTED
+  CONFIRMED
+  WAITLISTED
+  DECLINED
+  LEFT
+  REMOVED
+}
+
+enum AttendanceStatus {
+  PENDING
+  ATTENDED
+  NO_SHOW
+  EXCUSED
+}
+
+enum VenueStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum DocumentType {
+  ID_PROOF
+  BUSINESS_PROOF
+  ADDRESS_PROOF
+  GST_CERTIFICATE
+  PHOTO
+}
+
+enum DocumentStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+}
+
+enum KycStatus {
+  NOT_STARTED
+  PENDING
+  ACTIVATED
+  NEEDS_CLARIFICATION
+  REJECTED
+}
+
+enum BookingStatus {
+  PENDING
+  PAYMENT_PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  REFUND_PENDING
+  REFUNDED
+}
+
+enum CancelledBy {
+  USER
+  VENUE
+  ADMIN
+  SYSTEM
+}
+
+enum PaymentPurpose {
+  COURT_BOOKING
+}
+
+enum PaymentStatus {
+  INITIATED
+  SUCCEEDED
+  FAILED
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  UPI
+  CARD
+  NETBANKING
+  WALLET
+  OTHER
+}
+
+enum RefundStatus {
+  INITIATED
+  PROCESSED
+  FAILED
+}
+
+enum TransferStatus {
+  PENDING
+  PROCESSED
+  SETTLED
+  REVERSED
+  FAILED
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum OutboxStatus {
+  PENDING
+  DISPATCHED
+  DONE
+  FAILED
+}
+
+enum NotificationType {
+  GAME_INVITATION
+  GAME_JOIN_REQUEST
+  GAME_JOINED
+  GAME_CONFIRMED
+  GAME_CANCELLED
+  GAME_UPDATED
+  BOOKING_CONFIRMED
+  BOOKING_CANCELLED
+  PAYMENT_SUCCESS
+  REFUND_PROCESSED
+  MATCH_REMINDER
+  COMMUNITY_ANNOUNCEMENT
+}
+
+enum ConsentDocument {
+  TERMS
+  PRIVACY
+  REFUND_POLICY
+  CANCELLATION_POLICY
+  COMMUNITY_GUIDELINES
+}
+
+enum ReportEntity {
+  GAME
+  USER
+  VENUE
+  COMMUNITY
+  REVIEW
+}
+
+enum ReportStatus {
+  OPEN
+  IN_REVIEW
+  ACTIONED
+  DISMISSED
+}
+
+enum ActorType {
+  USER
+  SYSTEM
+  WEBHOOK
+}
+
+// Phase 2 / 3 enums
+enum CommunityVisibility {
+  PUBLIC
+  PRIVATE
+}
+
+enum CommunityRole {
+  MEMBER
+  MODERATOR
+  ADMIN
+}
+
+enum TournamentFormat {
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  ROUND_ROBIN
+  LEAGUE
+}
+
+enum TournamentStatus {
+  DRAFT
+  REGISTRATION_OPEN
+  REGISTRATION_CLOSED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum AchievementCategory {
+  PARTICIPATION
+  RELIABILITY
+  COMMUNITY
+  COMPETITION
+}
+
+// ───────────────── IDENTITY, TRUST & SAFETY ─────────────────
+
+model User {
+  id              String         @id @default(cuid(2))
+  phone           String?        @unique // E.164, e.g. +919812345678 (CHECK-constrained in raw SQL)
+  phoneVerifiedAt DateTime?      @db.Timestamptz(3)
+  email           String?        @unique
+  name            String?
+  avatarUrl       String?
+  status          UserStatus     @default(ACTIVE)
+  platformRoles   PlatformRole[] @default([PLAYER])
+  preferredLang   String         @default("en")
+  ageConfirmedAt  DateTime?      @db.Timestamptz(3) // 18+ self-declaration (see ADR-015)
+  deletedAt       DateTime?      @db.Timestamptz(3) // anonymised, not hard-deleted
+  createdAt       DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime       @updatedAt @db.Timestamptz(3)
+
+  playerProfile PlayerProfile?
+  venueStaff    VenueStaff[]
+  ownedVenues   Venue[]              @relation("VenueOwner")
+  bookings      Booking[]
+  payments      Payment[]
+  hostedGames   Game[]               @relation("HostGames")
+  participation GameParticipant[]
+  attendances   Attendance[]
+  notifications Notification[]
+  consents      ConsentRecord[]
+  blocksMade    UserBlock[]          @relation("Blocker")
+  blocksHad     UserBlock[]          @relation("Blocked")
+  reportsMade   Report[]             @relation("Reporter")
+  auditEntries  AuditLog[]
+  reviewsGiven  Review[]             @relation("ReviewAuthor")
+  reviewsGotten Review[]             @relation("ReviewTarget")
+  communities   CommunityMember[]
+  createdComms  Community[]          @relation("CommunityCreator")
+  organized     Tournament[]
+  entries       TournamentEntry[]
+  achievements  UserAchievement[]
+  reliability   ReliabilitySnapshot?
+
+  @@map("users")
+}
+
+model PlayerProfile {
+  id                String      @id @default(cuid(2))
+  userId            String      @unique
+  user              User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city              String      @default("Sirsa")
+  neighborhood      String?
+  approxLatitude    Float? // rounded to 2 dp (~1.1 km) — never store precise home location
+  approxLongitude   Float?
+  searchRadiusKm    Int         @default(10)
+  preferredSportId  String?
+  skillLevel        SkillLevel  @default(BEGINNER)
+  preferredFormat   SportFormat @default(DOUBLES)
+  bio               String?     @db.VarChar(300)
+  availability      Json? // [{ day: 1..7, fromMinute, toMinute }]
+  discoverable      Boolean     @default(true)
+  showAttendance    Boolean     @default(true)
+  notificationPrefs Json        @default("{}")
+  xpPoints          Int         @default(0) // Phase 2
+  currentLevel      Int         @default(1) // Phase 2
+  createdAt         DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(3)
+
+  @@index([city, skillLevel])
+  @@map("player_profiles")
+}
+
+model ConsentRecord {
+  id         String          @id @default(cuid(2))
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  document   ConsentDocument
+  version    String // e.g. "2026-11-01"
+  acceptedAt DateTime        @default(now()) @db.Timestamptz(3)
+  ipHash     String? // salted hash, not raw IP
+
+  @@unique([userId, document, version])
+  @@map("consent_records")
+}
+
+model UserBlock {
+  id        String   @id @default(cuid(2))
+  blockerId String
+  blocker   User     @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blockedId String
+  blocked   User     @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([blockerId, blockedId])
+  @@map("user_blocks")
+}
+
+model Report {
+  id             String       @id @default(cuid(2))
+  reporterId     String
+  reporter       User         @relation("Reporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  entityType     ReportEntity
+  entityId       String
+  reason         String
+  details        String?      @db.VarChar(1000)
+  status         ReportStatus @default(OPEN)
+  resolvedById   String?
+  resolutionNote String?
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  resolvedAt     DateTime?    @db.Timestamptz(3)
+
+  @@index([status, createdAt])
+  @@index([entityType, entityId])
+  @@map("reports")
+}
+
+model AuditLog {
+  id         String    @id @default(cuid(2))
+  actorType  ActorType @default(USER)
+  actorId    String?
+  actor      User?     @relation(fields: [actorId], references: [id], onDelete: Restrict)
+  action     String // e.g. VENUE_VERIFIED, USER_SUSPENDED, BOOKING_FORCE_CANCELLED
+  entityType String
+  entityId   String
+  before     Json?
+  after      Json?
+  reason     String? // mandatory for sensitive admin actions (enforced in service layer)
+  ipAddress  String?
+  requestId  String?
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([entityType, entityId])
+  @@index([actorId, createdAt])
+  @@map("audit_logs")
+}
+
+model PlatformConfig {
+  key         String   @id // e.g. "pricing"
+  value       Json
+  version     Int      @default(1)
+  updatedById String?
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@map("platform_config")
+}
+
+// ───────────────────── SPORTS, VENUES, COURTS ─────────────────────
+
+model Sport {
+  id         String       @id @default(cuid(2))
+  slug       String       @unique
+  name       String
+  minPlayers Int          @default(2)
+  maxPlayers Int          @default(4)
+  isActive   Boolean      @default(true)
+  courts     Court[]
+  games      Game[]
+  tournament Tournament[]
+
+  @@map("sports")
+}
+
+model Venue {
+  id               String      @id @default(cuid(2))
+  name             String
+  slug             String      @unique
+  legalName        String?
+  gstin            String?
+  description      String?     @db.Text
+  addressLine1     String
+  addressLine2     String?
+  city             String      @default("Sirsa")
+  state            String      @default("Haryana")
+  postalCode       String      @default("125055")
+  latitude         Float
+  longitude        Float
+  phone            String
+  email            String?
+  images           String[]    @default([])
+  amenities        String[]    @default([])
+  cancellationRule String?     @db.Text // human-readable; machine policy lives in cancellationPolicy
+  cancellationPolicy Json? // optional override of the default refund tiers (see 05 §2.5)
+  status           VenueStatus @default(DRAFT)
+  rejectionReason  String?
+  verifiedAt       DateTime?   @db.Timestamptz(3)
+  publishedAt      DateTime?   @db.Timestamptz(3)
+  ownerId          String
+  owner            User        @relation("VenueOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  createdAt        DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime    @updatedAt @db.Timestamptz(3)
+
+  staff         VenueStaff[]
+  documents     VenueDocument[]
+  linkedAccount VenueLinkedAccount?
+  courts        Court[]
+  games         Game[]
+  transfers     Transfer[]
+  reviews       Review[]
+  subscriptions Subscription[]
+
+  @@index([city, status])
+  @@map("venues")
+}
+
+model VenueStaff {
+  id        String    @id @default(cuid(2))
+  venueId   String
+  venue     Venue     @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      VenueRole @default(STAFF)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@unique([venueId, userId])
+  @@map("venue_staff")
+}
+
+model VenueDocument {
+  id           String         @id @default(cuid(2))
+  venueId      String
+  venue        Venue          @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  type         DocumentType
+  storageKey   String // key in the PRIVATE R2 bucket; served via short-lived signed URL only
+  status       DocumentStatus @default(SUBMITTED)
+  reviewerId   String?
+  reviewNote   String?
+  createdAt    DateTime       @default(now()) @db.Timestamptz(3)
+  reviewedAt   DateTime?      @db.Timestamptz(3)
+
+  @@index([venueId, status])
+  @@map("venue_documents")
+}
+
+model VenueLinkedAccount {
+  id                String    @id @default(cuid(2))
+  venueId           String    @unique
+  venue             Venue     @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  razorpayAccountId String    @unique // Route linked account; bank details are held by Razorpay, never by us
+  kycStatus         KycStatus @default(NOT_STARTED)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@map("venue_linked_accounts")
+}
+
+model Court {
+  id                  String  @id @default(cuid(2))
+  venueId             String
+  venue               Venue   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  sportId             String
+  sport               Sport   @relation(fields: [sportId], references: [id])
+  name                String
+  surfaceType         String?
+  isIndoor            Boolean @default(true)
+  isActive            Boolean @default(true)
+  baseHourlyRatePaise Int
+  slotMinutes         Int     @default(60) // grid granularity
+  minDurationMinutes  Int     @default(60)
+  maxDurationMinutes  Int     @default(120)
+  advanceBookingDays  Int     @default(14)
+  createdAt           DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(3)
+
+  schedule     CourtSchedule[]
+  pricingRules PricingRule[]
+  blocks       CourtBlock[]
+  bookings     Booking[]
+
+  @@index([venueId, isActive])
+  @@map("courts")
+}
+
+// Weekly operating windows. A court may have several windows per day (split shifts).
+model CourtSchedule {
+  id          String @id @default(cuid(2))
+  courtId     String
+  court       Court  @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  dayOfWeek   Int // ISO: 1 = Monday … 7 = Sunday
+  openMinute  Int // minutes after local midnight (Asia/Kolkata), 0–1440
+  closeMinute Int
+
+  @@unique([courtId, dayOfWeek, openMinute])
+  @@map("court_schedules")
+}
+
+// Time-band pricing. Highest `priority` wins; fallback is Court.baseHourlyRatePaise.
+model PricingRule {
+  id              String    @id @default(cuid(2))
+  courtId         String
+  court           Court     @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  name            String // "Weekday evening peak"
+  daysOfWeek      Int[] // ISO 1–7
+  startMinute     Int
+  endMinute       Int
+  hourlyRatePaise Int
+  priority        Int       @default(0)
+  validFrom       DateTime? @db.Date
+  validTo         DateTime? @db.Date
+
+  @@index([courtId])
+  @@map("pricing_rules")
+}
+
+model CourtBlock {
+  id          String   @id @default(cuid(2))
+  courtId     String
+  court       Court    @relation(fields: [courtId], references: [id], onDelete: Cascade)
+  startTime   DateTime @db.Timestamptz(3)
+  endTime     DateTime @db.Timestamptz(3)
+  reason      String?
+  createdById String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([courtId, startTime])
+  @@map("court_blocks")
+}
+
+// ─────────────── BOOKINGS, PAYMENTS, SETTLEMENT ───────────────
+// The no-overlap guarantee is an EXCLUDE constraint in raw SQL (see migration 0002).
+
+model Booking {
+  id            String        @id @default(cuid(2))
+  bookingNumber String        @unique @default(dbgenerated("('BK-' || to_char(now() AT TIME ZONE 'Asia/Kolkata', 'YYYY') || '-' || lpad(nextval('booking_number_seq')::text, 6, '0'))"))
+  userId        String
+  user          User          @relation(fields: [userId], references: [id], onDelete: Restrict)
+  courtId       String
+  court         Court         @relation(fields: [courtId], references: [id], onDelete: Restrict)
+  startTime     DateTime      @db.Timestamptz(3)
+  endTime       DateTime      @db.Timestamptz(3)
+  status        BookingStatus @default(PENDING)
+  holdExpiresAt DateTime?     @db.Timestamptz(3)
+  idempotencyKey String       @unique
+
+  // Immutable price snapshot, calculated once at reservation by packages/domain/fees.ts
+  baseAmountPaise          Int
+  convenienceFeePaise      Int  @default(0)
+  gstOnConvenienceFeePaise Int  @default(0)
+  discountPaise            Int  @default(0)
+  totalAmountPaise         Int
+  commissionPaise          Int  @default(0) // platform commission, deducted from venue payout
+  gstOnCommissionPaise     Int  @default(0)
+  venuePayoutPaise         Int
+  pricingConfigVersion     Int
+
+  confirmedAt        DateTime?   @db.Timestamptz(3)
+  completedAt        DateTime?   @db.Timestamptz(3)
+  cancelledAt        DateTime?   @db.Timestamptz(3)
+  cancelledBy        CancelledBy?
+  cancellationReason String?
+  createdAt          DateTime    @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime    @updatedAt @db.Timestamptz(3)
+
+  game     Game?
+  payments Payment[]
+
+  @@index([userId, status])
+  @@index([courtId, startTime])
+  @@index([status, holdExpiresAt])
+  @@map("bookings")
+}
+
+model Payment {
+  id                String         @id @default(cuid(2))
+  paymentNumber     String         @unique @default(dbgenerated("('PAY-' || to_char(now() AT TIME ZONE 'Asia/Kolkata', 'YYYY') || '-' || lpad(nextval('payment_number_seq')::text, 6, '0'))"))
+  purpose           PaymentPurpose @default(COURT_BOOKING)
+  bookingId         String?
+  booking           Booking?       @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  userId            String
+  user              User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  amountPaise       Int
+  status            PaymentStatus  @default(INITIATED)
+  method            PaymentMethod?
+  razorpayOrderId   String         @unique
+  razorpayPaymentId String?        @unique
+  idempotencyKey    String         @unique
+  failureCode       String?
+  failureReason     String?
+  capturedAt        DateTime?      @db.Timestamptz(3)
+  createdAt         DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime       @updatedAt @db.Timestamptz(3)
+
+  refunds  Refund[]
+  transfer Transfer?
+
+  @@index([bookingId])
+  @@index([status, createdAt])
+  @@map("payments")
+}
+
+model Refund {
+  id               String       @id @default(cuid(2))
+  paymentId        String
+  payment          Payment      @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  amountPaise      Int
+  policyTier       String? // e.g. "GT_24H", "H12_24", "LT_12H", "VENUE_CANCELLED"
+  reason           String?
+  status           RefundStatus @default(INITIATED)
+  razorpayRefundId String?      @unique
+  idempotencyKey   String       @unique
+  requestedById    String?
+  processedAt      DateTime?    @db.Timestamptz(3)
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+// One Razorpay Route transfer per payment (venue payout leg).
+model Transfer {
+  id                 String         @id @default(cuid(2))
+  paymentId          String         @unique
+  payment            Payment        @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  venueId            String
+  venue              Venue          @relation(fields: [venueId], references: [id], onDelete: Restrict)
+  amountPaise        Int
+  reversedPaise      Int            @default(0)
+  razorpayTransferId String?        @unique
+  status             TransferStatus @default(PENDING)
+  settledAt          DateTime?      @db.Timestamptz(3)
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+
+  @@index([venueId, status])
+  @@map("transfers")
+}
+
+model WebhookEvent {
+  id          String        @id @default(cuid(2))
+  provider    String // "razorpay"
+  eventId     String // provider event id (x-razorpay-event-id)
+  type        String
+  payload     Json
+  status      WebhookStatus @default(RECEIVED)
+  attempts    Int           @default(0)
+  error       String?
+  receivedAt  DateTime      @default(now()) @db.Timestamptz(3)
+  processedAt DateTime?     @db.Timestamptz(3)
+
+  @@unique([provider, eventId])
+  @@index([status, receivedAt])
+  @@map("webhook_events")
+}
+
+model OutboxJob {
+  id           String       @id @default(cuid(2))
+  type         String // "booking.expire", "game.reminder", "notification.deliver", …
+  payload      Json
+  dedupeKey    String       @unique
+  runAt        DateTime     @default(now()) @db.Timestamptz(3)
+  status       OutboxStatus @default(PENDING)
+  attempts     Int          @default(0)
+  lastError    String?
+  dispatchedAt DateTime?    @db.Timestamptz(3)
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([status, runAt])
+  @@map("outbox_jobs")
+}
+
+// ───────────────────── GAMES & PARTICIPATION ─────────────────────
+// Lifecycle is independent of Booking. A confirmed court is Game.bookingId != null.
+
+model Game {
+  id                 String         @id @default(cuid(2))
+  shareCode          String         @unique // 8-char base32 for public share links
+  title              String         @db.VarChar(120)
+  sportId            String
+  sport              Sport          @relation(fields: [sportId], references: [id])
+  hostId             String
+  host               User           @relation("HostGames", fields: [hostId], references: [id], onDelete: Restrict)
+  venueId            String?
+  venue              Venue?         @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  bookingId          String?        @unique
+  booking            Booking?       @relation(fields: [bookingId], references: [id], onDelete: SetNull)
+  communityId        String?
+  community          Community?     @relation(fields: [communityId], references: [id], onDelete: SetNull)
+  startTime          DateTime       @db.Timestamptz(3)
+  endTime            DateTime       @db.Timestamptz(3)
+  format             SportFormat    @default(DOUBLES)
+  minSkillLevel      SkillLevel     @default(BEGINNER)
+  maxSkillLevel      SkillLevel     @default(COMPETITIVE)
+  minParticipants    Int            @default(2)
+  maxParticipants    Int            @default(4)
+  confirmedCount     Int            @default(1) // includes host; mutated ONLY by atomic SQL (05 §3)
+  costPerPlayerPaise Int            @default(0) // informational; collected off-platform in Phase 1 (ADR-010)
+  joinPolicy         JoinPolicy     @default(OPEN)
+  visibility         GameVisibility @default(PUBLIC)
+  status             GameStatus     @default(OPEN)
+  customLocationName String?
+  rulesDescription   String?        @db.Text
+  cancelledReason    String?
+  createdAt          DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt          DateTime       @updatedAt @db.Timestamptz(3)
+
+  participants GameParticipant[]
+  attendances  Attendance[]
+  reviews      Review[]
+
+  @@index([sportId, status, startTime])
+  @@index([hostId])
+  @@index([venueId, startTime])
+  @@map("games")
+}
+
+model GameParticipant {
+  id            String            @id @default(cuid(2))
+  gameId        String
+  game          Game              @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  isHost        Boolean           @default(false)
+  status        ParticipantStatus @default(CONFIRMED)
+  hostMarkedPaid Boolean          @default(false)
+  joinedAt      DateTime          @default(now()) @db.Timestamptz(3)
+  leftAt        DateTime?         @db.Timestamptz(3)
+  updatedAt     DateTime          @updatedAt @db.Timestamptz(3)
+
+  @@unique([gameId, userId])
+  @@index([userId, status])
+  @@map("game_participants")
+}
+
+model Attendance {
+  id         String           @id @default(cuid(2))
+  gameId     String
+  game       Game             @relation(fields: [gameId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status     AttendanceStatus @default(PENDING)
+  markedById String?
+  markedAt   DateTime?        @db.Timestamptz(3)
+  notes      String?
+
+  @@unique([gameId, userId])
+  @@index([userId, status])
+  @@map("attendances")
+}
+
+model Notification {
+  id        String           @id @default(cuid(2))
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      NotificationType
+  title     String
+  body      String
+  linkUrl   String?
+  dedupeKey String?          @unique
+  readAt    DateTime?        @db.Timestamptz(3)
+  createdAt DateTime         @default(now()) @db.Timestamptz(3)
+
+  @@index([userId, readAt, createdAt])
+  @@map("notifications")
+}
+
+// ──────────────── PHASE 2 / 3 (create tables when the phase starts) ────────────────
+
+model Review {
+  id           String   @id @default(cuid(2))
+  authorId     String
+  author       User     @relation("ReviewAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+  gameId       String?
+  game         Game?    @relation(fields: [gameId], references: [id], onDelete: SetNull)
+  targetUserId String?
+  targetUser   User?    @relation("ReviewTarget", fields: [targetUserId], references: [id], onDelete: Cascade)
+  venueId      String?
+  venue        Venue?   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  rating       Int // 1–5 (CHECK-constrained)
+  comment      String?  @db.VarChar(1000)
+  isHidden     Boolean  @default(false)
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  // A review must reference a real shared game; one review per author/target/game.
+  @@unique([authorId, gameId, targetUserId])
+  @@index([targetUserId])
+  @@index([venueId])
+  @@map("reviews")
+}
+
+model ReliabilitySnapshot {
+  id           String   @id @default(cuid(2))
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  score        Int // 0–100, formula in 05 §6.2
+  sampleSize   Int
+  attended     Int
+  noShows      Int
+  lateCancels  Int
+  computedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("reliability_snapshots")
+}
+
+model Community {
+  id          String              @id @default(cuid(2))
+  name        String              @unique
+  slug        String              @unique
+  description String?             @db.Text
+  city        String              @default("Sirsa")
+  creatorId   String
+  creator     User                @relation("CommunityCreator", fields: [creatorId], references: [id], onDelete: Restrict)
+  visibility  CommunityVisibility @default(PUBLIC)
+  avatarUrl   String?
+  memberCount Int                 @default(1)
+  createdAt   DateTime            @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime            @updatedAt @db.Timestamptz(3)
+
+  members CommunityMember[]
+  games   Game[]
+
+  @@index([city, visibility])
+  @@map("communities")
+}
+
+model CommunityMember {
+  id          String        @id @default(cuid(2))
+  communityId String
+  community   Community     @relation(fields: [communityId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role        CommunityRole @default(MEMBER)
+  joinedAt    DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([communityId, userId])
+  @@map("community_members")
+}
+
+model Tournament {
+  id            String           @id @default(cuid(2))
+  title         String
+  slug          String           @unique
+  sportId       String
+  sport         Sport            @relation(fields: [sportId], references: [id])
+  organizerId   String
+  organizer     User             @relation(fields: [organizerId], references: [id])
+  format        TournamentFormat @default(SINGLE_ELIMINATION)
+  city          String           @default("Sirsa")
+  startDate     DateTime         @db.Timestamptz(3)
+  endDate       DateTime         @db.Timestamptz(3)
+  entryFeePaise Int              @default(0)
+  maxTeams      Int              @default(16)
+  status        TournamentStatus @default(DRAFT)
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt     DateTime         @updatedAt @db.Timestamptz(3)
+
+  entries TournamentEntry[]
+
+  @@map("tournaments")
+}
+
+model TournamentEntry {
+  id           String     @id @default(cuid(2))
+  tournamentId String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  userId       String
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  teamName     String?
+  seedNumber   Int?
+  paymentId    String? // Phase 3: extend PaymentPurpose with TOURNAMENT_ENTRY
+  createdAt    DateTime   @default(now()) @db.Timestamptz(3)
+
+  @@unique([tournamentId, userId])
+  @@map("tournament_entries")
+}
+
+model Achievement {
+  id          String              @id @default(cuid(2))
+  code        String              @unique
+  title       String
+  description String
+  category    AchievementCategory
+  xpReward    Int                 @default(50)
+  badgeIcon   String
+
+  awards UserAchievement[]
+
+  @@map("achievements")
+}
+
+model UserAchievement {
+  id            String      @id @default(cuid(2))
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  awardedAt     DateTime    @default(now()) @db.Timestamptz(3)
+
+  @@unique([userId, achievementId])
+  @@map("user_achievements")
+}
+
+model Subscription {
+  id               String   @id @default(cuid(2))
+  venueId          String
+  venue            Venue    @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  planName         String // STARTER | GROWTH | ENTERPRISE
+  amountPaise      Int
+  isActive         Boolean  @default(true)
+  currentPeriodEnd DateTime @db.Timestamptz(3)
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  @@map("subscriptions")
+}

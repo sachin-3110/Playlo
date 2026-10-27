@@ -1,0 +1,21 @@
+{
+  "name": "playlo-docs-verification",
+  "private": true,
+  "description": "Executable checks that back the claims in the Playlo handbook (docs/). Not application code.",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "npm run test:schema && npm run test:domain && npm run test:validators && npm run test:sql && npm run test:docs",
+    "test:schema": "node tools/prisma-validate.mjs",
+    "test:domain": "node --test domain/domain.test.ts",
+    "test:validators": "node --test validators/validators.test.ts",
+    "test:sql": "node sql/test-integrity.mjs",
+    "test:docs": "python tools/check-docs.py && node tools/validate-mermaid.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.12",
+    "jsdom": "^30.1.3",
+    "mermaid": "^11.17.2",
+    "prisma": "^6.19.3",
+    "zod": "^4.6.7"
+  }
+}

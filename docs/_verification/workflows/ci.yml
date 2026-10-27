@@ -1,0 +1,98 @@
+# .github/workflows/ci.yml
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read          # least privilege; add per-job permissions only where needed
+
+env:
+  NODE_VERSION: "24"      # current LTS line; Node 20 is end-of-life
+  PNPM_VERSION: "10"
+  # Throwaway local values — never real secrets in CI for PR builds
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/playlo_test
+  DIRECT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/playlo_test
+  APP_ENV: local
+  AUTH_SECRET: test-secret-test-secret-test-secret-123456
+  RAZORPAY_KEY_ID: rzp_test_placeholder
+  RAZORPAY_KEY_SECRET: test_secret_placeholder
+  RAZORPAY_WEBHOOK_SECRET: test_webhook_secret
+
+jobs:
+  validate:
+    name: Lint, typecheck, unit + integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4      # PostGIS included; btree_gist ships with Postgres contrib
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: playlo_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4          # pin every action to a commit SHA before launch
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level=high
+      - run: pnpm --filter @playlo/db prisma generate
+      - run: pnpm --filter @playlo/db prisma migrate deploy     # applies 0001_init + 0002_integrity to the service DB
+      - run: pnpm --filter @playlo/db seed
+
+      - run: pnpm turbo run lint typecheck
+      - run: pnpm turbo run test                                 # unit (domain, validators) + integration (real Postgres)
+
+  e2e:
+    name: Playwright (critical paths)
+    needs: validate
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env: { POSTGRES_PASSWORD: postgres, POSTGRES_DB: playlo_test }
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: "${{ env.PNPM_VERSION }}" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @playlo/db prisma generate
+      - run: pnpm --filter @playlo/db prisma migrate deploy
+      - run: pnpm --filter @playlo/db seed
+      - run: pnpm exec playwright install --with-deps chromium
+      # playwright.config.ts defines webServer: `pnpm --filter web build && pnpm --filter web start` on :3000
+      - run: pnpm test:e2e
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: playwright-report, path: apps/web/playwright-report, retention-days: 7 }
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions: { contents: read, security-events: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with: { languages: javascript-typescript }
+      - uses: github/codeql-action/analyze@v3
